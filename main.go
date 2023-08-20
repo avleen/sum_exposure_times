@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+        "math"
 	"os"
 	"path/filepath"
         "runtime"
@@ -39,6 +40,14 @@ func getExptimeInFile(filePath string) (float64, error) {
 	return exptimeValue, nil
 }
 
+func getFileSize(filePath string) (int64, error) {
+    fi, err := os.Stat(filePath)
+    if err != nil {
+        return 0, fmt.Errorf("failed to get file size %s: %v", filePath, err)
+    }
+    return fi.Size(), nil
+}
+
 func worker(files <-chan string, results chan<- ExptimeResult, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for path := range files {
@@ -47,8 +56,13 @@ func worker(files <-chan string, results chan<- ExptimeResult, wg *sync.WaitGrou
 			fmt.Printf("Error processing file %s: %v\n", path, err)
 			continue
 		}
+                size, err := getFileSize(path)
+                if err != nil {
+                    fmt.Printf("Error getting file size: %s: %v\n", path, err)
+                    continue
+                }
 		dir := filepath.Dir(path)
-		results <- ExptimeResult{dir, exptime}
+		results <- ExptimeResult{dir, exptime, size}
 	}
 }
 
@@ -61,6 +75,7 @@ func secondsToHoursMinutes(seconds float64) (int, int) {
 type ExptimeResult struct {
 	Directory string
 	Exptime   float64
+        Size      int64
 }
 
 func main() {
@@ -124,8 +139,10 @@ func main() {
 	}()
 
 	directoryExptime := make(map[string]float64)
+	directorySize := make(map[string]int64)
 	for result := range results {
 		directoryExptime[result.Directory] += result.Exptime
+		directorySize[result.Directory] += result.Size
 	}
 
         // Convert map keys to a slice for sorting
@@ -137,20 +154,22 @@ func main() {
         // Sort the directory names
         sort.Strings(dirs)
 
-
-
 	var totalExptime float64
-	fmt.Printf("Exptime\t\tDirectory (hours:minutes)\n")
+        var totalSize float64
+	fmt.Printf("Exptime\t\tSize\t\tDirectory (hours:minutes)\n")
 	fmt.Printf("-----------------------------------------------------\n")
         for _, dir := range dirs {
                 exptime := directoryExptime[dir]
 		hours, minutes := secondsToHoursMinutes(exptime)
-		fmt.Printf("%d:%02d\t\t%s\n", hours, minutes, dir)
+                size := float64(directorySize[dir]) / math.Pow(1024, 3)
+		fmt.Printf("%d:%02d\t\t%.2fG\t\t%s\n", hours, minutes, size, dir)
 		totalExptime += exptime
+                totalSize += size
 	}
 
 	totalHours, totalMinutes := secondsToHoursMinutes(totalExptime)
 	fmt.Printf("\nTotal EXPTIME: %d hours and %02d minutes\n", totalHours, totalMinutes)
+	fmt.Printf("\nTotal SIZE: %.2fG\n", totalSize)
 
 	// Profiling results
 	elapsedTime := time.Since(startTime)
